@@ -34,11 +34,16 @@ safeLoadLib(const char *name)
   Elf64_Addr cmd_entry, ld_so_entry;
   char elf_interpreter[MAX_ELF_INTERP_SZ];
 
+  // FIXME: Do we need to make it dynamic? Is setting this required?
+  ld_so_addr = (void*)0x7ffff81d5000;
   int cmd_fd = open(name, O_RDONLY);
   get_elf_interpreter(cmd_fd, &cmd_entry, elf_interpreter, ld_so_addr);
   // FIXME: The ELF Format manual says that we could pass the cmd_fd to ld.so,
   //   and it would use that to load it.
   close(cmd_fd);
+#ifndef UBUNTU
+   strncpy(elf_interpreter, name, sizeof elf_interpreter);
+#endif
 
   ld_so_fd = open(elf_interpreter, O_RDONLY);
   info.baseAddr = load_elf_interpreter(ld_so_fd, elf_interpreter,
@@ -57,13 +62,13 @@ static void
 get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
                     char* elf_interpreter, void *ld_so_addr)
 {
-  unsigned char e_ident[EI_NIDENT];
   int rc;
+  char e_ident[EI_NIDENT];
+
   rc = read(fd, e_ident, sizeof(e_ident));
   assert(rc == sizeof(e_ident));
   assert(strncmp(e_ident, ELFMAG, strlen(ELFMAG)) == 0);
-  // FIXME:  Add support for 32-bit ELF later
-  assert(e_ident[EI_CLASS] == ELFCLASS64);
+  assert(e_ident[EI_CLASS] == ELFCLASS64); // FIXME:  Add support for 32-bit ELF
 
   // Reset fd to beginning and parse file header
   lseek(fd, 0, SEEK_SET);
@@ -73,13 +78,15 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
   *cmd_entry = elf_hdr.e_entry;
 
   // Find ELF interpreter
-  int phoff = elf_hdr.e_phoff;
-  lseek(fd, phoff, SEEK_SET);
-  Elf64_Phdr phdr;
   int i;
-  for (i = 0; ; i++) {
+  Elf64_Phdr phdr;
+  int phoff = elf_hdr.e_phoff;
+
+  lseek(fd, phoff, SEEK_SET);
+  for (i = 0; i < elf_hdr.e_phnum; i++) {
     assert(i < elf_hdr.e_phnum);
     rc = read(fd, &phdr, sizeof(phdr)); // Read consecutive program headers
+#ifdef UBUNTU
     if (phdr.p_type == PT_INTERP) break;
   }
   lseek(fd, phdr.p_offset, SEEK_SET); // Point to beginning of elf interpreter
@@ -98,6 +105,9 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
       DLOG(INFO, "Debug symbols for interpreter in: %s\n", buf);
     }
   }
+#else // ifdef UBUNTU
+  }
+#endif // ifdef UBUNTU
 }
 
 static void*
@@ -133,8 +143,9 @@ load_elf_interpreter(int fd, char *elf_interpreter,
       if (firstTime) {
         baseAddr = map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
         firstTime = 0;
+      } else {
+        map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
       }
-      map_elf_interpreter_load_segment(fd, phdr, ld_so_addr);
     }
   }
   return baseAddr;
