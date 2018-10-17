@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -40,12 +41,14 @@ void runRtld();
 // Local functions
 static void getProcStatField(enum Procstat_t , char *, size_t );
 static void getStackRegion(Area *);
-static void deepCopyStack(void *, const void *, size_t,
-                          const void *, const void*);
-static void* createNewStackForRtld();
+static void* deepCopyStack(void *, const void *, size_t,
+                           const void *, const void*,
+                           const DynObjInfo_t *);
+static void* createNewStackForRtld(const DynObjInfo_t *);
 static void* getEntryPoint(DynObjInfo_t );
 static inline ElfW(auxv_t)* GET_AUXV_ADDR(char **env);
-static void patchAuxv(ElfW(auxv_t) *, unsigned long , unsigned long , int );
+static void patchAuxv(ElfW(auxv_t) *, unsigned long ,
+                      unsigned long , unsigned long );
 
 // Global functions
 
@@ -62,11 +65,12 @@ runRtld()
   }
   ldso_entrypoint = getEntryPoint(ldso);
   // Create new stack region to be used by RTLD
-  void *newStack = createNewStackForRtld();
+  void *newStack = createNewStackForRtld(&ldso);
   if (!newStack) {
     DLOG(ERROR, "Error creating new stack for RTLD. Exiting...\n");
     exit(-1);
   }
+  // TODO: Clean up all the registers?
   asm volatile (CLEAN_FOR_64_BIT(mov %0, %%esp; )
                 : : "g" (newStack) : "memory");
   asm volatile ("jmp *%0" : : "g" (ldso_entrypoint) : "memory");
@@ -137,36 +141,22 @@ GET_AUXV_ADDR(char **env)
   return auxvec;
 }
 
-// Given a pointer to auxvector, parses the aux vector and patches the AT_PHDR
-// and AT_PHNUM entries. If save is set, it saves original entries in
-// local, static variables. If save is not set, the original entries are
-// restored.
-// 
-// XXX: This is not used anywhere right now, but it's here for use in the
-// future.
+// Given a pointer to auxvector, parses the aux vector and patches the AT_PHDR,
+// AT_ENTRY, and AT_PHNUM entries.
 static void
-patchAuxv(ElfW(auxv_t) *av, unsigned long phnum, unsigned long phdr, int save)
+patchAuxv(ElfW(auxv_t) *av, unsigned long phnum,
+          unsigned long phdr, unsigned long entry)
 {
-  static unsigned long origPhnum;
-  static unsigned long origPhdr;
-
   for (; av->a_type != AT_NULL; ++av) {
     switch (av->a_type) {
       case AT_PHNUM:
-        if (save) {
-          origPhnum = av->a_un.a_val;
-          av->a_un.a_val = phnum;
-        } else {
-          av->a_un.a_val = origPhnum;
-        }
+        av->a_un.a_val = phnum;
         break;
       case AT_PHDR:
-        if (save) {
-         origPhdr = av->a_un.a_val;
-         av->a_un.a_val = phdr;
-        } else {
-          av->a_un.a_val = origPhdr;
-        }
+        av->a_un.a_val = phdr;
+        break;
+      case AT_ENTRY:
+        av->a_un.a_val = entry;
         break;
       default:
         break;
@@ -176,9 +166,10 @@ patchAuxv(ElfW(auxv_t) *av, unsigned long phnum, unsigned long phdr, int save)
 
 // Creates a deep copy of the stack region pointed to be `origStack` at the
 // location pointed to be `newStack`.
-static void
+static void*
 deepCopyStack(void *newStack, const void *origStack, size_t len,
-              const void *newStackEnd, const void *origStackEnd)
+              const void *newStackEnd, const void *origStackEnd,
+              const DynObjInfo_t *info)
 {
   // The main thing to do is patch the argv and env vectors in the stack to
   // point to addresses in the new stack region. Note that the argv and env
@@ -199,23 +190,28 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   ElfW(auxv_t) *newAuxv = GET_AUXV_ADDR(newEnv);
 
   // Patch the argv vector in the new stack
+  //   First, set up the argv vector based on the original stack
   for (int i = 0; origArgv[i] != NULL; i++) {
     off_t argvDelta = (uintptr_t)origArgv[i] - (uintptr_t)origArgv;
     newArgv[i] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
   }
-  // FIXME: This needs to be fixed. We have to get two arguments on the stack:
-  // The first argument needs to be RTLD and the second argument needs to be
-  // the target executable.
-  char *ptr = strstr(newArgv[0], "a.out");
-  if (ptr != 0) {
-    ptr[0] = 't'; // Replace a.out with t.out
-  }
+  //   Next, we use two env variables and push two items on the stack
+  //   From the point of view of ld.so, it would appear as if it was called
+  //   like this $ /lib/ld.so /path/to/target.exe
+  newArgv[-1] = getenv("TARGET_LD"); // The first argument is the linker
+  newArgv[0] = getenv("TARGET_APP"); // The second argument is the binary
+  newArgv[-2] = (char*)2; // This is argc; we set it to 2 to indicate 2 args
+  newArgv[-3] = (char*)0; // Zero out the start of stack just in case
 
   // Patch the env vector in the new stack
   for (int i = 0; origEnv[i] != NULL; i++) {
     off_t envDelta = (uintptr_t)origEnv[i] - (uintptr_t)origEnv;
     newEnv[i] = (char*)((uintptr_t)newEnv + (uintptr_t)envDelta);
   }
+
+  patchAuxv(newAuxv, info->phnum, info->phdr, info->entryPoint);
+
+  return (void*)&newArgv[-2];
 }
 
 // This function does three things:
@@ -223,7 +219,7 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
 //  2. Deep copies the original stack (from the kernel) in the new stack region
 //  3. Returns a pointer to the beginning of stack in the new stack region
 static void*
-createNewStackForRtld()
+createNewStackForRtld(const DynObjInfo_t *info)
 {
   Area stack;
   char stackEndStr[20] = {0};
@@ -263,8 +259,9 @@ createNewStackForRtld()
   void *newStackEnd = (void*)((unsigned long)newStack + newStackOffset);
 
   // 2. Deep copy stack
-  deepCopyStack(newStack, stack.addr, stack.size,
-                (void*)newStackEnd, (void*)origStackEnd);
+  newStackEnd = deepCopyStack(newStack, stack.addr, stack.size,
+                              (void*)newStackEnd, (void*)origStackEnd,
+                              info);
 
   return newStackEnd;
 }

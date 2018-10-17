@@ -7,6 +7,8 @@ typedef struct __DynObjInfo
 {
   void *baseAddr;
   void *entryPoint;
+  uint64_t phnum;
+  void *phdr;
 } DynObjInfo_t;
 
 DynObjInfo_t safeLoadLib(const char *);

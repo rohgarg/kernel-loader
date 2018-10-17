@@ -1,9 +1,11 @@
 FILE=create-stack
 
+RTLD_PATH=/lib64/ld-2.27.so
+
 OBJS=${FILE}.o procmapsutils.o custom-loader.o
 
 gdb: a.out t.out
-	gdb --args ./$<
+	TARGET_LD=${RTLD_PATH} TARGET_APP=$$PWD/t.out gdb --args ./$<
 
 procmapsutils.o: procmapsutils.c
 	gcc -g3 -O0 -I. -c $< -o $@

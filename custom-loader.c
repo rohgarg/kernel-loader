@@ -20,7 +20,8 @@
 //    https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c
 
 static void get_elf_interpreter(int , Elf64_Addr *, char* , void* );
-static void* load_elf_interpreter(int , char* , Elf64_Addr *, void * );
+static void* load_elf_interpreter(int , char* , Elf64_Addr *,
+                                  void * , DynObjInfo_t* );
 static void* map_elf_interpreter_load_segment(int , Elf64_Phdr , void * );
 
 // Global functions
@@ -35,7 +36,7 @@ safeLoadLib(const char *name)
   char elf_interpreter[MAX_ELF_INTERP_SZ];
 
   // FIXME: Do we need to make it dynamic? Is setting this required?
-  ld_so_addr = (void*)0x7ffff81d5000;
+  // ld_so_addr = (void*)0x7ffff81d5000;
   int cmd_fd = open(name, O_RDONLY);
   get_elf_interpreter(cmd_fd, &cmd_entry, elf_interpreter, ld_so_addr);
   // FIXME: The ELF Format manual says that we could pass the cmd_fd to ld.so,
@@ -47,7 +48,7 @@ safeLoadLib(const char *name)
 
   ld_so_fd = open(elf_interpreter, O_RDONLY);
   info.baseAddr = load_elf_interpreter(ld_so_fd, elf_interpreter,
-                                        &ld_so_entry, ld_so_addr);
+                                        &ld_so_entry, ld_so_addr, &info);
   // FIXME: The ELF Format manual says that we could pass the ld_so_fd to ld.so,
   //   and it would use that to load it.
   close(ld_so_fd);
@@ -112,7 +113,8 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
 
 static void*
 load_elf_interpreter(int fd, char *elf_interpreter,
-                     Elf64_Addr *ld_so_entry, void *ld_so_addr)
+                     Elf64_Addr *ld_so_entry, void *ld_so_addr,
+                     DynObjInfo_t *info)
 {
   char e_ident[EI_NIDENT];
   int rc;
@@ -148,6 +150,8 @@ load_elf_interpreter(int fd, char *elf_interpreter,
       }
     }
   }
+  info->phnum = elf_hdr.e_phnum;
+  info->phdr = baseAddr + elf_hdr.e_phoff;
   return baseAddr;
 }
 
