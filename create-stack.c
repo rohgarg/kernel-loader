@@ -56,6 +56,10 @@ runRtld()
 {
   // Load RTLD (ld.so)
   DynObjInfo_t ldso = safeLoadLib(RTLD);
+  if (ldso.baseAddr == NULL || ldso.entryPoint == NULL) {
+    DLOG(ERROR, "Error loading the runtime loader (%s). Exiting...\n", RTLD);
+    return;
+  }
   ldso_entrypoint = getEntryPoint(ldso);
   // Create new stack region to be used by RTLD
   void *newStack = createNewStackForRtld();
@@ -65,7 +69,7 @@ runRtld()
   }
   asm volatile (CLEAN_FOR_64_BIT(mov %0, %%esp; )
                 : : "g" (newStack) : "memory");
-  asm volatile ("jmp %0" : : "g" (ldso_entrypoint) : "memory");
+  asm volatile ("jmp *%0" : : "g" (ldso_entrypoint) : "memory");
 }
 
 #ifdef STANDALONE
@@ -176,7 +180,6 @@ static void
 deepCopyStack(void *newStack, const void *origStack, size_t len,
               const void *newStackEnd, const void *origStackEnd)
 {
-  // TODO: Deep copy stack
   // The main thing to do is patch the argv and env vectors in the stack to
   // point to addresses in the new stack region. Note that the argv and env
   // are simply arrays of pointers. The pointers point to strings in other
@@ -194,6 +197,25 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   char **newArgv    = (void*)GET_ARGV_ADDR(newStackEnd);
   char **newEnv     = (void*)GET_ENV_ADDR(newArgv, newArgc);
   ElfW(auxv_t) *newAuxv = GET_AUXV_ADDR(newEnv);
+
+  // Patch the argv vector in the new stack
+  for (int i = 0; origArgv[i] != NULL; i++) {
+    off_t argvDelta = (uintptr_t)origArgv[i] - (uintptr_t)origArgv;
+    newArgv[i] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
+  }
+  // FIXME: This needs to be fixed. We have to get two arguments on the stack:
+  // The first argument needs to be RTLD and the second argument needs to be
+  // the target executable.
+  char *ptr = strstr(newArgv[0], "a.out");
+  if (ptr != 0) {
+    ptr[0] = 't'; // Replace a.out with t.out
+  }
+
+  // Patch the env vector in the new stack
+  for (int i = 0; origEnv[i] != NULL; i++) {
+    off_t envDelta = (uintptr_t)origEnv[i] - (uintptr_t)origEnv;
+    newEnv[i] = (char*)((uintptr_t)newEnv + (uintptr_t)envDelta);
+  }
 }
 
 // This function does three things:
@@ -209,7 +231,7 @@ createNewStackForRtld()
 
   // 1. Allocate new stack region
   void *newStack = mmap(NULL, stack.size, PROT_READ | PROT_WRITE,
-                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                        MAP_GROWSDOWN | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (newStack == MAP_FAILED) {
     DLOG(ERROR, "Failed to mmap new stack region: %s\n", strerror(errno));
     return NULL;
@@ -242,7 +264,7 @@ createNewStackForRtld()
 
   // 2. Deep copy stack
   deepCopyStack(newStack, stack.addr, stack.size,
-                (void*)origStackEnd, (void*)newStackEnd);
+                (void*)newStackEnd, (void*)origStackEnd);
 
   return newStackEnd;
 }

@@ -9,7 +9,10 @@
 #define INFO  2 // Informational logs
 #define ERROR 1 // Highest error/exception level
 
-#define RTLD        "/lib64/ld-2.27.so"
+#ifndef RTLD
+# define RTLD        "/lib64/ld-2.27.so"
+# warning "Using /lib64/ld-2.27.so as the runtime loader. Update if necessary."
+#endif // ifndef RTLD
 
 #define VA_ARGS(...)  , ##__VA_ARGS__
 #define DLOG(LOG_LEVEL, fmt, ...)                                              \

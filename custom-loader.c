@@ -114,7 +114,7 @@ static void*
 load_elf_interpreter(int fd, char *elf_interpreter,
                      Elf64_Addr *ld_so_entry, void *ld_so_addr)
 {
-  unsigned char e_ident[EI_NIDENT];
+  char e_ident[EI_NIDENT];
   int rc;
   int firstTime = 1;
   void *baseAddr = NULL;
