@@ -12,7 +12,7 @@ custom-loader.o: custom-loader.c
 	gcc -g3 -O0 -I. -c $< -o $@
 
 ${FILE}.o: ${FILE}.c
-	gcc -DSTANDALONE -g3 -O0 -I. -c $< -o $@
+	gcc -DSTANDALONE -std=gnu11 -g3 -O0 -I. -c $< -o $@
 
 t.out: target.o # Target application
 	gcc -g3 -O0 $< -o $@
