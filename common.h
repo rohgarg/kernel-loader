@@ -38,5 +38,6 @@ enum Procstat_t
 // FIXME: 0x1000 is one page; Use sysconf(PAGESIZE) instead.
 #define ROUND_DOWN(x) ((unsigned long long)(x) \
                       & ~(unsigned long long)(0x1000-1))
+#define ROUND_UP(x)  (((x) + 0x1000 - 1) & ~(0x1000 - 1))
 
 #endif // ifndef COMMON_H

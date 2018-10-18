@@ -37,6 +37,7 @@ safeLoadLib(const char *name)
 
   // FIXME: Do we need to make it dynamic? Is setting this required?
   // ld_so_addr = (void*)0x7ffff81d5000;
+  // ld_so_addr = (void*)0x7ffff7dd7000;
   int cmd_fd = open(name, O_RDONLY);
   get_elf_interpreter(cmd_fd, &cmd_entry, elf_interpreter, ld_so_addr);
   // FIXME: The ELF Format manual says that we could pass the cmd_fd to ld.so,
@@ -204,7 +205,18 @@ map_elf_interpreter_load_segment(int fd, Elf64_Phdr phdr, void *ld_so_addr)
   }
   // Required by ELF Format:
   if (phdr.p_memsz > phdr.p_filesz) {
-    memset((char *)rc2 + phdr.p_filesz, '\0', phdr.p_memsz - phdr.p_filesz);
+    // This condition is true for the RW (data) segment of ld.so
+    // We need to clear out the rest of memory contents, similarly to
+    // what the kernel would do. See here:
+    //   https://elixir.bootlin.com/linux/v4.18.11/source/fs/binfmt_elf.c#L905
+    // Note that p_memsz indicates end of data (&_end)
+
+    // First, get to the page boundary
+    uintptr_t endByte = ROUND_UP((uintptr_t)((char*)rc2 + phdr.p_memsz));
+    // Next, figure out the number of bytes we need to clear out.
+    // From Bss to the end of page.
+    size_t bytes = endByte - (uintptr_t)((char*)rc2 + phdr.p_filesz);
+    memset((char *)rc2 + phdr.p_filesz, 0, bytes);
   }
   if (first_time) {
     first_time = 0;
