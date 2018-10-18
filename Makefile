@@ -4,6 +4,9 @@ RTLD_PATH=/lib64/ld-2.27.so
 
 OBJS=${FILE}.o procmapsutils.o custom-loader.o
 
+run: a.out t.out
+	TARGET_LD=${RTLD_PATH} TARGET_APP=$$PWD/t.out ./$< dummy
+
 gdb: a.out t.out
 	TARGET_LD=${RTLD_PATH} TARGET_APP=$$PWD/t.out gdb --args ./$< dummy
 
