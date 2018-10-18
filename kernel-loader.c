@@ -234,6 +234,18 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   //
   //   The Linux kernel ensures that the start of stack is always 16-byte
   //   aligned. It seems like this is part of the Linux kernel x86-64 ABI.
+  //   For example, see here:
+  //
+  //     https://elixir.bootlin.com/linux/v4.18.11/source/fs/binfmt_elf.c#L150
+  //
+  //     https://elixir.bootlin.com/linux/v4.18.11/source/fs/binfmt_elf.c#L288
+  //
+  //   (The kernel uses the STACK_ROUND macro to first set up the stack base
+  //    at a 16-byte aligned address, and then pushes items on the stack.)
+  //
+  //   We could do something similar on the new stack region. But perhaps it's
+  //   easier to just depend on the original stack having at least two args:
+  //   "/path/to/kernel-loader" and "/path/to/target.exe".
   //
   //   NOTE: We don't need to patch newArgc, since the original stack,
   //   from where we would have inherited the data in the new stack, already
