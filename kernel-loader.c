@@ -291,12 +291,14 @@ createNewStackForRtld(const DynObjInfo_t *info)
   getProcStatField(STARTSTACK, stackEndStr, sizeof stackEndStr);
 
   // NOTE: The kernel sets up the stack in the following format.
-  //      0(%rsp)                        NULL (Stack Start for Application)
-  //      LP_SIZE(%rsp)                  argc
-  //      (2*LP_SIZE)(%rsp)              argv[0]
+  //      -1(%rsp)                       Stack end for application
+  //      0(%rsp)                        argc (Stack start for application)
+  //      LP_SIZE(%rsp)                  argv[0]
+  //      (2*LP_SIZE)(%rsp)              argv[1]
   //      ...
-  //      (LP_SIZE*(argc+1))(%rsp)       NULL
-  //      (LP_SIZE*(argc+2))(%rsp)       envp[0]
+  //      (LP_SIZE*(argc))(%rsp)         NULL
+  //      (LP_SIZE*(argc+1))(%rsp)       envp[0]
+  //      (LP_SIZE*(argc+2))(%rsp)       envp[1]
   //      ...
   //                                     NULL
   //
