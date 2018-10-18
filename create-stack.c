@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <assert.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -49,6 +50,7 @@ static void* getEntryPoint(DynObjInfo_t );
 static inline ElfW(auxv_t)* GET_AUXV_ADDR(char **env);
 static void patchAuxv(ElfW(auxv_t) *, unsigned long ,
                       unsigned long , unsigned long );
+static void printUsage();
 
 // Global functions
 
@@ -58,7 +60,13 @@ void
 runRtld()
 {
   // Load RTLD (ld.so)
-  DynObjInfo_t ldso = safeLoadLib(RTLD);
+  char *ldname  = getenv("TARGET_LD");
+  if (!ldname) {
+    printUsage();
+    return;
+  }
+
+  DynObjInfo_t ldso = safeLoadLib(ldname);
   if (ldso.baseAddr == NULL || ldso.entryPoint == NULL) {
     DLOG(ERROR, "Error loading the runtime loader (%s). Exiting...\n", RTLD);
     return;
@@ -80,10 +88,21 @@ runRtld()
 int
 main(int argc, char **argv)
 {
+  if (argc < 2) {
+    printUsage();
+    return -1;
+  }
   runRtld();
   return 0;
 }
 #endif
+
+static void
+printUsage()
+{
+  fprintf(stderr, "Usage: TARGET_LD=/path/to/ld.so ./kernel-loader "
+          "<target-application> [application arguments ...]\n");
+}
 
 // Returns the /proc/self/stat entry in the out string (of length len)
 static void
@@ -165,12 +184,16 @@ patchAuxv(ElfW(auxv_t) *av, unsigned long phnum,
 }
 
 // Creates a deep copy of the stack region pointed to be `origStack` at the
-// location pointed to be `newStack`.
+// location pointed to be `newStack`. Returns the start-of-stack pointer
+// in the new stack region.
 static void*
 deepCopyStack(void *newStack, const void *origStack, size_t len,
               const void *newStackEnd, const void *origStackEnd,
               const DynObjInfo_t *info)
 {
+  // This function assumes that this env var is set.
+  assert(getenv("TARGET_LD"));
+
   // The main thing to do is patch the argv and env vectors in the stack to
   // point to addresses in the new stack region. Note that the argv and env
   // are simply arrays of pointers. The pointers point to strings in other
@@ -195,14 +218,22 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
     off_t argvDelta = (uintptr_t)origArgv[i] - (uintptr_t)origArgv;
     newArgv[i] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
   }
-  //   Next, we use two env variables and push two items on the stack
+  //   Next, we patch argv[0], the first argument, on the new stack
+  //   to point to /path/to/ld.so
+  //
   //   From the point of view of ld.so, it would appear as if it was called
-  //   like this $ /lib/ld.so /path/to/target.exe
+  //   like this $ /lib/ld.so /path/to/target.exe app-args ...
+  //
   //   NOTE: The kernel loader needs to be called with two arguments to
   //   get a stack which is 16-byte aligned.
-  newArgv[0] = getenv("TARGET_LD"); // The first argument is the linker
-  newArgv[1] = getenv("TARGET_APP"); // The second argument is the binary
-  newArgv[-1] = (char*)2; // This is argc; we set it to 2 to indicate 2 args
+  //
+  //   NOTE: We don't need to patch newArgc, since the original stack,
+  //   from where we would have inherited the data in the new stack, already
+  //   had the correct value. The kernel loader was called with the right
+  //   arguments.
+
+  off_t argvDelta = (uintptr_t)getenv("TARGET_LD") - (uintptr_t)origArgv;
+  newArgv[0] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
 
   // Patch the env vector in the new stack
   for (int i = 0; origEnv[i] != NULL; i++) {
@@ -211,10 +242,14 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   }
 
   patchAuxv(newAuxv, info->phnum,
-            (uintptr_t)info->phdr, (uintptr_t)info->entryPoint);
+            (uintptr_t)info->phdr,
+            (uintptr_t)info->entryPoint);
 
+  // We clear out the rest of the new stack region just in case...
   memset(newStack, 0, (void*)&newArgv[-2] - newStack);
-  return (void*)&newArgv[-1];
+
+  // Return the start of new stack.
+  return (void*)newArgcAddr;
 }
 
 // This function does three things:
