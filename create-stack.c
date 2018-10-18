@@ -18,28 +18,9 @@
 #include "custom-loader.h"
 #include "procmapsutils.h"
 
-#define eax rax
-#define ebx rbx
-#define ecx rcx
-#define edx rax
-#define ebp rbp
-#define esi rsi
-#define edi rdi
-#define esp rsp
-#define CLEAN_FOR_64_BIT_HELPER(args ...) # args
-#define CLEAN_FOR_64_BIT(args ...)        CLEAN_FOR_64_BIT_HELPER(args)
-
-// Helper macro to get pointers to argc, argv[0], and env[0], given
-// a pointer to the end of stack
-#define GET_ARGC_ADDR(end)          (unsigned long)(end) + sizeof(unsigned long)
-#define GET_ARGV_ADDR(end)          (unsigned long)(end) + 2 * sizeof(unsigned long)
-#define GET_ENV_ADDR(argv, argc)    &(argv)[(argc) + 1]
-
-// Pointer to the ldso_entrypoint
-static void *ldso_entrypoint;
 void runRtld();
 
-// Local functions
+// Local function declarations
 static void getProcStatField(enum Procstat_t , char *, size_t );
 static void getStackRegion(Area *);
 static void* deepCopyStack(void *, const void *, size_t,
@@ -47,7 +28,6 @@ static void* deepCopyStack(void *, const void *, size_t,
                            const DynObjInfo_t *);
 static void* createNewStackForRtld(const DynObjInfo_t *);
 static void* getEntryPoint(DynObjInfo_t );
-static inline ElfW(auxv_t)* GET_AUXV_ADDR(char **env);
 static void patchAuxv(ElfW(auxv_t) *, unsigned long ,
                       unsigned long , unsigned long );
 static void printUsage();
@@ -59,6 +39,9 @@ static void printUsage();
 void
 runRtld()
 {
+  // Pointer to the ld.so entry point
+  void *ldso_entrypoint = NULL;
+
   // Load RTLD (ld.so)
   char *ldname  = getenv("TARGET_LD");
   if (!ldname) {
@@ -68,16 +51,20 @@ runRtld()
 
   DynObjInfo_t ldso = safeLoadLib(ldname);
   if (ldso.baseAddr == NULL || ldso.entryPoint == NULL) {
-    DLOG(ERROR, "Error loading the runtime loader (%s). Exiting...\n", RTLD);
+    DLOG(ERROR, "Error loading the runtime loader (%s). Exiting...\n", ldname);
     return;
   }
+
   ldso_entrypoint = getEntryPoint(ldso);
+
   // Create new stack region to be used by RTLD
   void *newStack = createNewStackForRtld(&ldso);
   if (!newStack) {
     DLOG(ERROR, "Error creating new stack for RTLD. Exiting...\n");
     exit(-1);
   }
+
+  // Change the stack pointer to point to the new stack and jump into ld.so
   // TODO: Clean up all the registers?
   asm volatile (CLEAN_FOR_64_BIT(mov %0, %%esp; )
                 : : "g" (newStack) : "memory");
@@ -96,6 +83,8 @@ main(int argc, char **argv)
   return 0;
 }
 #endif
+
+// Local functions
 
 static void
 printUsage()
@@ -148,20 +137,8 @@ getStackRegion(Area *stack) // OUT
   close(mapsfd);
 }
 
-// Returns a pointer to aux vector, given a pointer to the environ vector
-// on the stack
-static inline ElfW(auxv_t)*
-GET_AUXV_ADDR(char **env)
-{
-  ElfW(auxv_t) *auxvec;
-  char **evp = env;
-  while (*evp++ != NULL);
-  auxvec = (ElfW(auxv_t) *) evp;
-  return auxvec;
-}
-
-// Given a pointer to auxvector, parses the aux vector and patches the AT_PHDR,
-// AT_ENTRY, and AT_PHNUM entries.
+// Given a pointer to aux vector, parses the aux vector, and patches the
+// following three entries: AT_PHDR, AT_ENTRY, and AT_PHNUM
 static void
 patchAuxv(ElfW(auxv_t) *av, unsigned long phnum,
           unsigned long phdr, unsigned long entry)
@@ -200,16 +177,16 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   // locationsi in the stack
   memcpy(newStack, origStack, len);
 
-  void *origArgcAddr = (void*)GET_ARGC_ADDR(origStackEnd);
-  int  origArgc      = *(int*)origArgcAddr;
-  char **origArgv    = (void*)GET_ARGV_ADDR(origStackEnd);
-  char **origEnv     = (void*)GET_ENV_ADDR(origArgv, origArgc);
+  void *origArgcAddr     = (void*)GET_ARGC_ADDR(origStackEnd);
+  int  origArgc          = *(int*)origArgcAddr;
+  char **origArgv        = (void*)GET_ARGV_ADDR(origStackEnd);
+  const char **origEnv   = (void*)GET_ENV_ADDR(origArgv, origArgc);
   ElfW(auxv_t) *origAuxv = GET_AUXV_ADDR(origEnv);
 
-  void *newArgcAddr = (void*)GET_ARGC_ADDR(newStackEnd);
-  int  newArgc      = *(int*)newArgcAddr;
-  char **newArgv    = (void*)GET_ARGV_ADDR(newStackEnd);
-  char **newEnv     = (void*)GET_ENV_ADDR(newArgv, newArgc);
+  void *newArgcAddr     = (void*)GET_ARGC_ADDR(newStackEnd);
+  int  newArgc          = *(int*)newArgcAddr;
+  char **newArgv        = (void*)GET_ARGV_ADDR(newStackEnd);
+  const char **newEnv   = (void*)GET_ENV_ADDR(newArgv, newArgc);
   ElfW(auxv_t) *newAuxv = GET_AUXV_ADDR(newEnv);
 
   // Patch the argv vector in the new stack
@@ -241,11 +218,16 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
     newEnv[i] = (char*)((uintptr_t)newEnv + (uintptr_t)envDelta);
   }
 
+  // The aux vector, which we would have inherited from the original stack,
+  // has entries that correspond to the kernel loader binary. In particular,
+  // it has these entries AT_PHNUM, AT_PHDR, and AT_ENTRY that correspond
+  // to kernel-loader. So, we atch the aux vector in the new stack to
+  // correspond to the new binary: the freshly loaded ld.so.
   patchAuxv(newAuxv, info->phnum,
             (uintptr_t)info->phdr,
             (uintptr_t)info->entryPoint);
 
-  // We clear out the rest of the new stack region just in case...
+  // We clear out the rest of the new stack region just in case ...
   memset(newStack, 0, (void*)&newArgv[-2] - newStack);
 
   // Return the start of new stack.
@@ -311,4 +293,3 @@ getEntryPoint(DynObjInfo_t info)
 {
   return info.entryPoint;
 }
-

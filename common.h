@@ -1,18 +1,18 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#ifndef DEBUG_LEVEL
-# define DEBUG_LEVEL 1
-#endif // ifndef DEBUG_LEVEL
+#include <link.h>
+#include <string.h>
 
+// Logging levels
 #define NOISE 3 // Noise!
 #define INFO  2 // Informational logs
 #define ERROR 1 // Highest error/exception level
 
-#ifndef RTLD
-# define RTLD        "/lib64/ld-2.27.so"
-# warning "Using /lib64/ld-2.27.so as the runtime loader. Update if necessary."
-#endif // ifndef RTLD
+#ifndef DEBUG_LEVEL
+// Let's announce errors out loud
+# define DEBUG_LEVEL 1
+#endif // ifndef DEBUG_LEVEL
 
 #define VA_ARGS(...)  , ##__VA_ARGS__
 #define DLOG(LOG_LEVEL, fmt, ...)                                              \
@@ -39,5 +39,50 @@ enum Procstat_t
 #define ROUND_DOWN(x) ((unsigned long long)(x) \
                       & ~(unsigned long long)(0x1000-1))
 #define ROUND_UP(x)  (((x) + 0x1000 - 1) & ~(0x1000 - 1))
+
+// TODO: This is very x86-64 specific; support other architectures??
+#define eax rax
+#define ebx rbx
+#define ecx rcx
+#define edx rax
+#define ebp rbp
+#define esi rsi
+#define edi rdi
+#define esp rsp
+#define CLEAN_FOR_64_BIT_HELPER(args ...) # args
+#define CLEAN_FOR_64_BIT(args ...)        CLEAN_FOR_64_BIT_HELPER(args)
+
+// Returns pointer to argc, given a pointer to end of stack
+static inline void*
+GET_ARGC_ADDR(const void* stackEnd)
+{
+  return (void*)((uintptr_t)(stackEnd) + sizeof(uintptr_t));
+}
+
+// Returns pointer to argv[0], given a pointer to end of stack
+static inline void*
+GET_ARGV_ADDR(const void* stackEnd)
+{
+  return (void*)((unsigned long)(stackEnd) + 2 * sizeof(uintptr_t));
+}
+
+// Returns pointer to env[0], given a pointer to end of stack
+static inline void*
+GET_ENV_ADDR(char **argv, int argc)
+{
+  return (void*)&argv[argc + 1];
+}
+
+// Returns a pointer to aux vector, given a pointer to the environ vector
+// on the stack
+static inline ElfW(auxv_t)*
+GET_AUXV_ADDR(const char **env)
+{
+  ElfW(auxv_t) *auxvec;
+  const char **evp = env;
+  while (*evp++ != NULL);
+  auxvec = (ElfW(auxv_t) *) evp;
+  return auxvec;
+}
 
 #endif // ifndef COMMON_H

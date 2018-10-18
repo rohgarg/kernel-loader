@@ -31,11 +31,14 @@ kernel-loader: ${OBJS}
 vi vim:
 	vim ${FILE}.c
 
+tags:
+	gtags .
+
 dist: clean
 	(dir=`basename $$PWD` && cd .. && tar zcvf $$dir.tgz $$dir)
 	(dir=`basename $$PWD` && ls -l ../$$dir.tgz)
 
 clean:
-	rm -f kernel-loader ${OBJS} target.o t.out
+	rm -f kernel-loader ${OBJS} target.o t.out GTAGS GRTAGS GPATH
 
-.PHONY: dist vi vim clean gdb
+.PHONY: dist vi vim clean gdb tags
