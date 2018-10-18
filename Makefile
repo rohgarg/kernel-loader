@@ -1,4 +1,4 @@
-FILE=create-stack
+FILE=kernel-loader
 
 RTLD_PATH=/lib64/ld-2.27.so
 
