@@ -198,10 +198,11 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   //   Next, we use two env variables and push two items on the stack
   //   From the point of view of ld.so, it would appear as if it was called
   //   like this $ /lib/ld.so /path/to/target.exe
-  newArgv[-1] = getenv("TARGET_LD"); // The first argument is the linker
-  newArgv[0] = getenv("TARGET_APP"); // The second argument is the binary
-  newArgv[-2] = (char*)2; // This is argc; we set it to 2 to indicate 2 args
-  newArgv[-3] = (char*)0; // Zero out the start of stack just in case
+  //   NOTE: The kernel loader needs to be called with two arguments to
+  //   get a stack which is 16-byte aligned.
+  newArgv[0] = getenv("TARGET_LD"); // The first argument is the linker
+  newArgv[1] = getenv("TARGET_APP"); // The second argument is the binary
+  newArgv[-1] = (char*)2; // This is argc; we set it to 2 to indicate 2 args
 
   // Patch the env vector in the new stack
   for (int i = 0; origEnv[i] != NULL; i++) {
@@ -209,9 +210,11 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
     newEnv[i] = (char*)((uintptr_t)newEnv + (uintptr_t)envDelta);
   }
 
-  patchAuxv(newAuxv, info->phnum, info->phdr, info->entryPoint);
+  patchAuxv(newAuxv, info->phnum,
+            (uintptr_t)info->phdr, (uintptr_t)info->entryPoint);
 
-  return (void*)&newArgv[-2];
+  memset(newStack, 0, (void*)&newArgv[-2] - newStack);
+  return (void*)&newArgv[-1];
 }
 
 // This function does three things:
