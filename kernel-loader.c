@@ -171,11 +171,23 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
   // This function assumes that this env var is set.
   assert(getenv("TARGET_LD"));
 
-  // The main thing to do is patch the argv and env vectors in the stack to
-  // point to addresses in the new stack region. Note that the argv and env
-  // are simply arrays of pointers. The pointers point to strings in other
-  // locationsi in the stack
+  // Return early if any pointer is NULL
+  if (!newStack || !origStack ||
+      !newStackEnd || !origStackEnd ||
+      !info) {
+    return NULL;
+  }
+
+  // First, we do a shallow copy, which is essentially, just copying the
+  // bits from the original stack into the new stack.
   memcpy(newStack, origStack, len);
+
+  // Next, turn the shallow copy into a deep copy.
+  //
+  // The main thing we need to do is to patch the argv and env vectors in
+  // the new stack to point to addresses in the new stack region. Note that
+  // the argv and env are simply arrays of pointers. The pointers point to
+  // strings in other locations in the stack.
 
   void *origArgcAddr     = (void*)GET_ARGC_ADDR(origStackEnd);
   int  origArgc          = *(int*)origArgcAddr;
