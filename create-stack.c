@@ -195,20 +195,39 @@ deepCopyStack(void *newStack, const void *origStack, size_t len,
     off_t argvDelta = (uintptr_t)origArgv[i] - (uintptr_t)origArgv;
     newArgv[i] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
   }
+
   //   Next, we patch argv[0], the first argument, on the new stack
-  //   to point to /path/to/ld.so
+  //   to point to "/path/to/ld.so".
   //
   //   From the point of view of ld.so, it would appear as if it was called
-  //   like this $ /lib/ld.so /path/to/target.exe app-args ...
+  //   like this: $ /lib/ld.so /path/to/target.exe app-args ...
   //
-  //   NOTE: The kernel loader needs to be called with two arguments to
-  //   get a stack which is 16-byte aligned.
+  //   NOTE: The kernel loader needs to be called with at least two arguments
+  //   to get a stack that is 16-byte aligned at the start. Since we want to
+  //   be able to jump into ld.so with at least two arguments (ld.so and the
+  //   target exe) on the new stack, we also need two arguments on the
+  //   original stack.
+  //
+  //   If the original stack had just one argument, we would have inherited
+  //   that alignment in the new stack. Trying to push in another argument
+  //   (target exe) on the new stack would destroy the 16-byte alignment
+  //   on the new stack. This would lead to a crash later on in ld.so.
+  //
+  //   The problem is that there are instructions (like, "movaps") in ld.so's
+  //   code that operate on the stack memory region and require their
+  //   operands to be 16-byte aligned. A non-16-byte-aligned operand (for
+  //   example, the stack base pointer) leads to a general protection
+  //   exception (#GP), which translates into a segfault for the user
+  //   process.
+  //
+  //   The Linux kernel ensures that the start of stack is always 16-byte
+  //   aligned. It seems like this is part of the Linux kernel x86-64 ABI.
   //
   //   NOTE: We don't need to patch newArgc, since the original stack,
   //   from where we would have inherited the data in the new stack, already
-  //   had the correct value. The kernel loader was called with the right
-  //   arguments.
-
+  //   had the correct value for origArgc. We just make argv[0] in the
+  //   new stack to point to "/path/to/ld.so", instead of
+  //   "/path/to/kernel-loader".
   off_t argvDelta = (uintptr_t)getenv("TARGET_LD") - (uintptr_t)origArgv;
   newArgv[0] = (char*)((uintptr_t)newArgv + (uintptr_t)argvDelta);
 
