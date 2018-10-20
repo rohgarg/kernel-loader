@@ -39,6 +39,7 @@ enum Procstat_t
 #define ROUND_DOWN(x) ((unsigned long long)(x) \
                       & ~(unsigned long long)(0x1000-1))
 #define ROUND_UP(x)  (((x) + 0x1000 - 1) & ~(0x1000 - 1))
+#define PAGE_OFFSET(x)  ((x) & (0x1000 - 1))
 
 // TODO: This is very x86-64 specific; support other architectures??
 #define eax rax

@@ -179,30 +179,36 @@ map_elf_interpreter_load_segment(int fd, Elf64_Phdr phdr, void *ld_so_addr)
     assert(phdr.p_vaddr % phdr.p_align == phdr.p_offset % phdr.p_align);
   }
   int vaddr = phdr.p_vaddr;
-  phdr.p_vaddr = ROUND_DOWN(phdr.p_vaddr);
-  phdr.p_offset = ROUND_DOWN(phdr.p_offset);
-  phdr.p_memsz = phdr.p_memsz + (vaddr - phdr.p_vaddr);
+
+  int flags = MAP_PRIVATE;
+  unsigned long addr = ROUND_DOWN(base_address + vaddr);
+  size_t size = ROUND_UP(phdr.p_filesz + PAGE_OFFSET(phdr.p_vaddr));
+  off_t offset = phdr.p_offset - PAGE_OFFSET(phdr.p_vaddr);
+
+  // phdr.p_vaddr = ROUND_DOWN(phdr.p_vaddr);
+  // phdr.p_offset = ROUND_DOWN(phdr.p_offset);
+  // phdr.p_memsz = phdr.p_memsz + (vaddr - phdr.p_vaddr);
   // NOTE:  base_address is 0 for first load segment
   if (first_time) {
     phdr.p_vaddr += (unsigned long long)ld_so_addr;
   } else {
-    phdr.p_vaddr += (unsigned long long)base_address;
+    flags |= MAP_FIXED;
+  }
+  if (ld_so_addr) {
+    flags |= MAP_FIXED;
   }
   // FIXME:  On first load segment, we should map 0x400000 (2*phdr.p_align),
   //         and then unmap the unused portions later after all the
   //         LOAD segments are mapped.  This is what ld.so would do.
-  if (first_time && ld_so_addr == NULL) {
-    rc2 = mmap((void *)phdr.p_vaddr, phdr.p_memsz,
-               prot, MAP_PRIVATE, fd, phdr.p_offset);
-   } else {
-    rc2 = mmap((void *)phdr.p_vaddr, phdr.p_memsz,
-               prot, MAP_PRIVATE|MAP_FIXED, fd, phdr.p_offset);
-   }
+  rc2 = mmap((void *)addr, size, prot, MAP_PRIVATE, fd, offset);
   if (rc2 == MAP_FAILED) {
     DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n",
-         (void*)phdr.p_vaddr, strerror(errno));
+         (void*)addr, strerror(errno));
     return NULL;
   }
+  unsigned long startBss = (uintptr_t)base_address +
+                          phdr.p_vaddr + phdr.p_filesz;
+  unsigned long endBss = (uintptr_t)base_address + phdr.p_vaddr + phdr.p_memsz;
   // Required by ELF Format:
   if (phdr.p_memsz > phdr.p_filesz) {
     // This condition is true for the RW (data) segment of ld.so
@@ -212,11 +218,26 @@ map_elf_interpreter_load_segment(int fd, Elf64_Phdr phdr, void *ld_so_addr)
     // Note that p_memsz indicates end of data (&_end)
 
     // First, get to the page boundary
-    uintptr_t endByte = ROUND_UP((uintptr_t)((char*)rc2 + phdr.p_memsz));
+    uintptr_t endByte = ROUND_UP(startBss);
     // Next, figure out the number of bytes we need to clear out.
     // From Bss to the end of page.
-    size_t bytes = endByte - (uintptr_t)((char*)rc2 + phdr.p_filesz);
-    memset((char *)rc2 + phdr.p_filesz, 0, bytes);
+    size_t bytes = endByte - startBss;
+    memset((void*)startBss, 0, bytes);
+  }
+  // If there's more bss that overflows to another page, map it in and
+  // zero it out
+  startBss  = ROUND_UP(startBss);
+  endBss    = ROUND_UP(endBss);
+  if (endBss > startBss) {
+    void *base = (void*)startBss;
+    size_t len = endBss - startBss;
+    flags |= MAP_ANONYMOUS; // This should give us 0-ed out pages
+    rc2 = mmap(base, len, prot, flags, -1, 0);
+    if (rc2 == MAP_FAILED) {
+      DLOG(ERROR, "Failed to map memory region at %p. Error:%s\n",
+           (void*)startBss, strerror(errno));
+      return NULL;
+    }
   }
   if (first_time) {
     first_time = 0;
