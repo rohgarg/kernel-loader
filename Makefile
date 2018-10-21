@@ -8,14 +8,14 @@ TARGET_OBJS=target.o
 CFLAGS=-g3 -O0 -fPIC -I. -c -std=gnu11
 KERNEL_LOADER_CFLAGS=-DSTANDALONE
 
-KERNEL_LOADER_BIN=kernel-loader
-TARGET_BIN=t.out
+KERNEL_LOADER_BIN=kernel-loader.exe
+TARGET_BIN=t.exe
 
-run: kernel-loader t.out
-	TARGET_LD=${RTLD_PATH} ./$< $$PWD/t.out arg1 arg2 arg3
+run: ${KERNEL_LOADER_BIN} ${TARGET_BIN}
+	TARGET_LD=${RTLD_PATH} ./$< $$PWD/${TARGET_BIN} arg1 arg2 arg3
 
-gdb: kernel-loader t.out
-	TARGET_LD=${RTLD_PATH} gdb --args ./$< $$PWD/t.out arg1 arg2 arg3
+gdb: ${KERNEL_LOADER_BIN} ${TARGET_BIN}
+	TARGET_LD=${RTLD_PATH} gdb --args ./$< $$PWD/${TARGET_BIN} arg1 arg2 arg3
 
 .c.o:
 	gcc ${CFLAGS} $< -o $@
