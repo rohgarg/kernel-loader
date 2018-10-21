@@ -18,8 +18,6 @@
 #include "custom-loader.h"
 #include "procmapsutils.h"
 
-void runRtld();
-
 // Local function declarations
 static void getProcStatField(enum Procstat_t , char *, size_t );
 static void getStackRegion(Area *);
@@ -27,6 +25,8 @@ static void* deepCopyStack(void *, const void *, size_t,
                            const void *, const void*,
                            const DynObjInfo_t *);
 static void* createNewStackForRtld(const DynObjInfo_t *);
+static void* createNewHeapForRtld(const DynObjInfo_t *);
+static int insertTrampoline(void* , void* );
 static void* getEntryPoint(DynObjInfo_t );
 static void patchAuxv(ElfW(auxv_t) *, unsigned long ,
                       unsigned long , unsigned long );
@@ -39,6 +39,8 @@ static void printUsage();
 void
 runRtld()
 {
+  int rc = -1;
+
   // Pointer to the ld.so entry point
   void *ldso_entrypoint = NULL;
 
@@ -61,6 +63,25 @@ runRtld()
   void *newStack = createNewStackForRtld(&ldso);
   if (!newStack) {
     DLOG(ERROR, "Error creating new stack for RTLD. Exiting...\n");
+    exit(-1);
+  }
+
+  // Create new heap region to be used by RTLD
+  void *newHeap = createNewHeapForRtld(&ldso);
+  if (!newHeap) {
+    DLOG(ERROR, "Error creating new heap for RTLD. Exiting...\n");
+    exit(-1);
+  }
+
+  setEndOfHeap(newHeap + PAGE_SIZE);
+  rc = insertTrampoline(ldso.mmapAddr, &mmapWrapper);
+  if (rc < 0) {
+    DLOG(ERROR, "Error inserting trampoline for mmap. Exiting...\n");
+    exit(-1);
+  }
+  rc = insertTrampoline(ldso.sbrkAddr, &sbrkWrapper);
+  if (rc < 0) {
+    DLOG(ERROR, "Error inserting trampoline for sbrk. Exiting...\n");
     exit(-1);
   }
 
@@ -329,6 +350,75 @@ createNewStackForRtld(const DynObjInfo_t *info)
                               info);
 
   return newStackEnd;
+}
+
+// This function allocates a new heap for (the possibly second) ld.so.
+// The initial heap size is 1 page
+//
+// Returns the start address of the new heap on success, or NULL on
+// failure.
+static void*
+createNewHeapForRtld(const DynObjInfo_t *info)
+{
+  void *addr = mmap(0, PAGE_SIZE, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (addr == MAP_FAILED) {
+    DLOG(ERROR, "Failed to mmap region. Error: %s\n",
+         strerror(errno));
+    return NULL;
+  }
+  return addr;
+}
+
+// Returns 0 on success, -1 on failure
+static int
+insertTrampoline(void *from_addr, void *to_addr)
+{
+  int rc;
+#if defined(__x86_64__)
+  unsigned char asm_jump[] = {
+    // mov    $0x1234567812345678,%rax
+    0x48, 0xb8, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12,
+    // jmpq   *%rax
+    0xff, 0xe0
+  };
+  // Beginning of address in asm_jump:
+  const int addr_offset = 2;
+#elif defined(__i386__)
+    static unsigned char asm_jump[] = {
+      0xb8, 0x78, 0x56, 0x34, 0x12, // mov    $0x12345678,%eax
+      0xff, 0xe0                    // jmp    *%eax
+  };
+  // Beginning of address in asm_jump:
+  const int addr_offset = 1;
+#else
+# error "Architecture not supported"
+#endif
+
+  void *page_base = (void *)ROUND_DOWN(from_addr);
+  int page_length = PAGE_SIZE;
+  if (from_addr + sizeof(asm_jump) - page_base > PAGE_SIZE) {
+    // The patching instructions cross page boundary. View page as double size.
+    page_length = 2 * PAGE_SIZE;
+  }
+
+  // Temporarily add write permissions
+  rc = mprotect(page_base, page_length, PROT_READ | PROT_WRITE | PROT_EXEC);
+  if (rc < 0) {
+    DLOG(ERROR, "mprotect failed: %s\n", strerror(errno));
+    return -1;
+  }
+
+  // Now, do the patching
+  memcpy(from_addr, asm_jump, sizeof(asm_jump));
+  memcpy(from_addr + addr_offset, &to_addr, sizeof(&to_addr));
+
+  // Finally, remove the write permissions
+  rc = mprotect(page_base, page_length, PROT_READ | PROT_EXEC);
+  if (rc < 0) {
+    DLOG(ERROR, "mprotect failed: %s\n", strerror(errno));
+    return -1;
+  }
 }
 
 // This function returns the entry point of the ld.so executable given

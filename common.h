@@ -35,11 +35,14 @@ enum Procstat_t
    STARTSTACK = 27,
 };
 
+#define PAGE_SIZE 0x1000ULL
+
 // FIXME: 0x1000 is one page; Use sysconf(PAGESIZE) instead.
 #define ROUND_DOWN(x) ((unsigned long long)(x) \
-                      & ~(unsigned long long)(0x1000-1))
-#define ROUND_UP(x)  (((x) + 0x1000 - 1) & ~(0x1000 - 1))
-#define PAGE_OFFSET(x)  ((x) & (0x1000 - 1))
+                      & ~(unsigned long long)(PAGE_SIZE - 1))
+#define ROUND_UP(x)  (((unsigned long long)(x) + PAGE_SIZE - 1) & \
+                      ~(PAGE_SIZE - 1))
+#define PAGE_OFFSET(x)  ((x) & (PAGE_SIZE - 1))
 
 // TODO: This is very x86-64 specific; support other architectures??
 #define eax rax
@@ -85,5 +88,11 @@ GET_AUXV_ADDR(const char **env)
   auxvec = (ElfW(auxv_t) *) evp;
   return auxvec;
 }
+
+void runRtld();
+void* sbrkWrapper(intptr_t );
+void* mmapWrapper(void *, size_t , int , int , int , off_t );
+void* getEndofHeap();
+void setEndOfHeap(void *);
 
 #endif // ifndef COMMON_H

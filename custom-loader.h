@@ -9,6 +9,8 @@ typedef struct __DynObjInfo
   void *entryPoint;
   uint64_t phnum;
   void *phdr;
+  void *mmapAddr;
+  void *sbrkAddr;
 } DynObjInfo_t;
 
 DynObjInfo_t safeLoadLib(const char *);

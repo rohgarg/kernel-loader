@@ -2,7 +2,14 @@ FILE=kernel-loader
 
 RTLD_PATH=/lib64/ld-2.27.so
 
-OBJS=${FILE}.o procmapsutils.o custom-loader.o
+KERNEL_LOADER_OBJS=${FILE}.o procmapsutils.o custom-loader.o mmap-wrapper.o sbrk-wrapper.o
+TARGET_OBJS=target.o
+
+CFLAGS=-g3 -O0 -fPIC -I. -c -std=gnu11
+KERNEL_LOADER_CFLAGS=-DSTANDALONE
+
+KERNEL_LOADER_BIN=kernel-loader
+TARGET_BIN=t.out
 
 run: kernel-loader t.out
 	TARGET_LD=${RTLD_PATH} ./$< $$PWD/t.out arg1 arg2 arg3
@@ -10,23 +17,17 @@ run: kernel-loader t.out
 gdb: kernel-loader t.out
 	TARGET_LD=${RTLD_PATH} gdb --args ./$< $$PWD/t.out arg1 arg2 arg3
 
-procmapsutils.o: procmapsutils.c
-	gcc -g3 -O0 -I. -c $< -o $@
-
-custom-loader.o: custom-loader.c
-	gcc -g3 -O0 -I. -c $< -o $@
+.c.o:
+	gcc ${CFLAGS} $< -o $@
 
 ${FILE}.o: ${FILE}.c
-	gcc -DSTANDALONE -std=gnu11 -g3 -O0 -I. -c $< -o $@
+	gcc ${CFLAGS} ${KERNEL_LOADER_CFLAGS} $< -o $@
 
-t.out: target.o # Target application
-	gcc -g3 -O0 $< -o $@
+${TARGET_BIN}: ${TARGET_OBJS}
+	gcc $< -o $@
 
-target.o: target.c # Target application
-	gcc -g3 -O0 -std=gnu11 -I. -c $< -o $@
-
-kernel-loader: ${OBJS}
-	gcc -Wl,-Ttext-segment -Wl,0x800000 -g3 -O0 -static -I. $^ -o $@
+${KERNEL_LOADER_BIN}: ${KERNEL_LOADER_OBJS}
+	gcc -Wl,-Ttext-segment -Wl,0x800000 -static $^ -o $@
 
 vi vim:
 	vim ${FILE}.c
@@ -39,6 +40,6 @@ dist: clean
 	(dir=`basename $$PWD` && ls -l ../$$dir.tgz)
 
 clean:
-	rm -f kernel-loader ${OBJS} target.o t.out GTAGS GRTAGS GPATH
+	rm -f ${KERNEL_LOADER_OBJS} ${TARGET_OBJS} ${KERNEL_LOADER_BIN} ${TARGET_BIN} GTAGS GRTAGS GPATH
 
 .PHONY: dist vi vim clean gdb tags

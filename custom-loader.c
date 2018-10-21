@@ -22,7 +22,8 @@
 static void get_elf_interpreter(int , Elf64_Addr *, char* , void* );
 static void* load_elf_interpreter(int , char* , Elf64_Addr *,
                                   void * , DynObjInfo_t* );
-static void* map_elf_interpreter_load_segment(int , Elf64_Phdr , void * );
+off_t get_symbol_offset(int , const char* , const char* );
+static void* map_elf_interpreter_load_segment(int , Elf64_Phdr , void* );
 
 // Global functions
 DynObjInfo_t
@@ -50,6 +51,8 @@ safeLoadLib(const char *name)
   ld_so_fd = open(elf_interpreter, O_RDONLY);
   info.baseAddr = load_elf_interpreter(ld_so_fd, elf_interpreter,
                                         &ld_so_entry, ld_so_addr, &info);
+  info.mmapAddr = info.baseAddr + get_symbol_offset(ld_so_fd, name, "mmap");
+  info.sbrkAddr = info.baseAddr + get_symbol_offset(ld_so_fd, name, "sbrk");
   // FIXME: The ELF Format manual says that we could pass the ld_so_fd to ld.so,
   //   and it would use that to load it.
   close(ld_so_fd);
@@ -110,6 +113,60 @@ get_elf_interpreter(int fd, Elf64_Addr *cmd_entry,
 #else // ifdef UBUNTU
   }
 #endif // ifdef UBUNTU
+}
+
+// Returns offset of symbol, or -1 on failure.
+off_t
+get_symbol_offset(int fd, const char *ldname, const char *symbol)
+{
+  int i;
+  int rc;
+  char strtab[10000];
+  Elf64_Shdr sect_hdr;
+  Elf64_Shdr symtab;
+  Elf64_Sym symtab_entry;
+  int symtab_found = 0;
+
+  // Reset fd to beginning and parse file header
+  lseek(fd, 0, SEEK_SET);
+  Elf64_Ehdr elf_hdr;
+  rc = read(fd, &elf_hdr, sizeof(elf_hdr));
+  assert(rc == sizeof(elf_hdr));
+
+  // Get start of symbol table and string table
+  Elf64_Off shoff = elf_hdr.e_shoff;
+  lseek(fd, shoff, SEEK_SET);
+  for (i = 0; i < elf_hdr.e_shnum; i++) {
+    rc = read(fd, &sect_hdr, sizeof sect_hdr);
+    assert(rc == sizeof(sect_hdr));
+    if (sect_hdr.sh_type == SHT_SYMTAB) {
+      symtab = sect_hdr;
+      symtab_found = 1;
+    }
+    if (sect_hdr.sh_type == SHT_STRTAB) {
+      int fd2 = open(ldname, O_RDONLY);
+      lseek(fd2, sect_hdr.sh_offset, SEEK_SET);
+      assert(sect_hdr.sh_size < sizeof(strtab));
+      rc = read(fd2, strtab, sect_hdr.sh_size);
+      assert(rc == sect_hdr.sh_size);
+      close(fd2);
+    }
+  }
+
+  if (!symtab_found) {
+    return -1;
+  }
+
+  // Move to beginning of symbol table
+  lseek(fd, symtab.sh_offset, SEEK_SET);
+  for ( ; lseek(fd, 0, SEEK_CUR) - symtab.sh_offset < symtab.sh_size; ) {
+    rc = read(fd, &symtab_entry, sizeof symtab_entry);
+    assert(rc == sizeof(symtab_entry));
+    if (strcmp(strtab + symtab_entry.st_name, symbol) == 0) {
+      // found address as offset from base address
+      return symtab_entry.st_value;
+    }
+  }
 }
 
 static void*
